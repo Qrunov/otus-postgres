@@ -1,300 +1,262 @@
-# Отчет: Секционирование таблицы в PostgreSQL
+<img src="https://r2cdn.perplexity.ai/pplx-full-logo-primary-dark%402x.png" style="height:64px;margin-right:32px"/>
+
+# Отчёт: Настройка миникластера PostgreSQL с репликацией
 
 ## Цель работы
-Освоить механизм секционирования таблиц в PostgreSQL для повышения производительности запросов и упрощения управления данными.
 
-## Анализ структуры данных
-В базе данных `demo` была проанализирована таблица `bookings(book_ref, book_date, total_amount)`.
+Реализовать миникластер на трёх виртуальных машинах с логической репликацией PostgreSQL и настроить физическую репликацию на четвёртую ВМ.
 
-Ключевые наблюдения:
-- Поле `book_date` содержит временную метку бронирования.
-- Данные распределены по годам (2025, 2026).
-- Таблица содержит миллионы записей (≈ 4.9 млн).
+***
 
-Пример распределения данных по месяцам показал равномерную нагрузку, что делает дату хорошим кандидатом для секционирования.
+## Архитектура кластера
 
-## Выбор таблицы
-Выбрана таблица `bookings`, потому что:
-- Она крупная (миллионы строк).
-- Часто используется в запросах.
-- Имеет естественный временной ключ `book_date`.
-- Есть фильтрация по дате (типичный сценарий — отчеты, аналитика).
+| ВМ | Порт | Роль | Таблица для записи | Таблица для чтения |
+| :-- | :-- | :-- | :-- | :-- |
+| ВМ1 (ex14_vm1) | 5433 | Публикатор test + Подписчик test2 | test | test2 |
+| ВМ2 (ex14_vm2) | 5434 | Публикатор test2 + Подписчик test | test2 | test |
+| ВМ3 (ex14_vm3) | 5435 | Подписчик (оба стола) + Резерв | — | test + test2 |
+| ВМ4 (ex14_vm4) | 5436 | Физический репликат (от ВМ3) | — | test + test2 |
 
-## Выбор типа секционирования
-Выбран тип секционирования по диапазону (RANGE).
 
-Причины:
-- Данные логически делятся по времени.
-- Часто используются условия вида `WHERE book_date > ...` и `WHERE book_date BETWEEN ...`.
-- PostgreSQL эффективно выполняет pruning, то есть исключает лишние секции при выполнении запроса.
+***
 
-## Создание секционированной таблицы
-Создана новая таблица:
+## Пошаговая настройка
+
+### 1. Настройка ВМ1 (порт 5433)
+
+**Создание таблиц:**
 
 ```sql
-CREATE TABLE bookings_m (
-    LIKE bookings
-) PARTITION BY RANGE (book_date);
+CREATE TABLE test(id int);      -- для записи
+CREATE TABLE test2(id int);     -- для чтения
 ```
 
-Созданы секции по годам:
+**Настройка публикации:**
 
 ```sql
-CREATE TABLE bookings2025
-PARTITION OF bookings_m
-FOR VALUES FROM ('2025-01-01') TO ('2026-01-01');
-
-CREATE TABLE bookings2026
-PARTITION OF bookings_m
-FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');
+CREATE PUBLICATION pub_test FOR TABLE test;
+ALTER SYSTEM SET wal_level = 'logical';
 ```
 
-## Миграция данных
-Перенос данных выполнен командой:
+После изменения `wal_level` выполнен перезапуск кластера:
+
+```bash
+pg_ctlcluster restart 15 ex14_vm1
+```
+
+**Подтверждение публикации:**
 
 ```sql
-INSERT INTO bookings_m
-SELECT * FROM bookings;
+SELECT * FROM pg_publication_tables;
+-- pub_test | public | test
 ```
 
-Результат:
-- Всего записей: `4905238`
-- Распределение:
-  - 2025: `1702311` строк
-  - 2026: `3202927` строк
-
-## Проверка корректности
-Проверка показала, что данные распределены по секциям правильно.
-
-### Проверка за 2025 год
-Запрос:
+**Подписка на test2 с ВМ2:**
 
 ```sql
-SELECT count(*) FROM bookings WHERE date_part('year', book_date) = 2025;
+CREATE SUBSCRIPTION test2_sub 
+  CONNECTION 'port=5434' 
+  PUBLICATION test2_pub;
 ```
 
-Результат выполнения:
 
-```text
- count
----------
- 1702311
-(1 row)
-```
+***
 
-Запрос:
+### 2. Настройка ВМ2 (порт 5434)
+
+**Создание таблиц:**
 
 ```sql
-SELECT count(*) FROM bookings2025;
+CREATE TABLE test2(id int);     -- для записи
+CREATE TABLE test(id int);      -- для чтения
 ```
 
-Результат выполнения:
-
-```text
- count
----------
- 1702311
-(1 row)
-```
-
-### Проверка за 2026 год
-Запрос:
+**Настройка `wal_level`:**
 
 ```sql
-SELECT count(*) FROM bookings WHERE date_part('year', book_date) = 2026;
+ALTER SYSTEM SET wal_level = 'logical';
 ```
 
-Результат выполнения:
+Перезапуск кластера:
 
-```text
- count
----------
- 3202927
-(1 row)
+```bash
+pg_ctlcluster restart 15 ex14_vm2
 ```
 
-Запрос:
+**Создание публикации:**
 
 ```sql
-SELECT count(*) FROM bookings2026;
+CREATE PUBLICATION test2_pub FOR TABLE test2;
 ```
 
-Результат выполнения:
-
-```text
- count
----------
- 3202927
-(1 row)
-```
-
-Результаты совпадают, значит распределение данных по секциям выполнено корректно.
-
-## Результаты тестовых запросов
-### Проверка вставки
-Запрос:
+**Подписка на test с ВМ1:**
 
 ```sql
-INSERT INTO bookings_m VALUES ('5G8J99', '2026-05-05', 34999);
+CREATE SUBSCRIPTION test_sub 
+  CONNECTION 'port=5433' 
+  PUBLICATION pub_test;
 ```
 
-Результат выполнения:
-
-```text
-INSERT 0 1
-```
-
-Проверка вставленной строки:
+**Проверка репликации:**
 
 ```sql
-SELECT * FROM bookings2026 WHERE book_ref = '5G8J99';
+SELECT * FROM test;
+-- id: 1, 2, 3 (данные из ВМ1)
 ```
 
-Результат выполнения:
 
-```text
- book_ref |       book_date        | total_amount
-----------+------------------------+--------------
- 5G8J99   | 2026-05-05 00:00:00+03 |     34999.00
-(1 row)
-```
+***
 
-Это подтверждает, что запись попала в секцию `bookings2026`.
+### 3. Настройка ВМ3 (порт 5435)
 
-### Проверка обновления
-Запрос:
+**Настройка `wal_level`:**
 
 ```sql
-UPDATE bookings_m
-SET total_amount = 44000
-WHERE book_ref = '5G8J99';
+ALTER SYSTEM SET wal_level = 'logical';
+pg_ctlcluster restart 15 ex14_vm3
 ```
 
-Результат выполнения:
-
-```text
-UPDATE 1
-```
-
-Проверка результата:
+**Создание таблиц:**
 
 ```sql
-SELECT * FROM bookings2026 WHERE book_ref = '5G8J99';
+CREATE TABLE test(id int);
+CREATE TABLE test2(id int);
 ```
 
-Результат выполнения:
-
-```text
- book_ref |       book_date        | total_amount
-----------+------------------------+--------------
- 5G8J99   | 2026-05-05 00:00:00+03 |     44000.00
-(1 row)
-```
-
-Это показывает, что обновление через родительскую таблицу корректно отработало в секции.
-
-### Проверка удаления
-Запрос:
+**Подписки на обе публикации:**
 
 ```sql
-DELETE FROM bookings_m WHERE book_ref = '5G8J99';
+CREATE SUBSCRIPTION test_vm3_sub 
+  CONNECTION 'port=5433' 
+  PUBLICATION pub_test;
+
+CREATE SUBSCRIPTION test2_vm3_sub 
+  CONNECTION 'port=5434' 
+  PUBLICATION test2_pub;
 ```
 
-Результат выполнения:
-
-```text
-DELETE 1
-```
-
-Проверка результата:
+**Проверка данных:**
 
 ```sql
-SELECT * FROM bookings2026 WHERE book_ref = '5G8J99';
+SELECT * FROM test;   -- id: 1, 2, 3
+SELECT * FROM test2;  -- id: 4, 5, 6
 ```
 
-Результат выполнения:
 
-```text
- book_ref | book_date | total_amount
-----------+-----------+--------------
-(0 rows)
+***
+
+### 4. Настройка ВМ4 (порт 5436) — физическая репликация
+
+**Подготовка:**
+
+```bash
+pg_ctlcluster stop 15 ex14_vm4
+rm -fr /var/lib/postgresql/15/ex14_vm4/
 ```
 
-Это подтверждает, что удаление прошло успешно.
+**Создание физической реплики через pg_basebackup:**
 
-### Проверка плана выполнения запросов
-До секционирования:
+```bash
+sudo -u postgres pg_basebackup \
+  -D /var/lib/postgresql/15/ex14_vm4 \
+  -W -R -p 5435 -U postgres
+```
+
+Ключи:
+
+- `-D` — директория для данных
+- `-W` — запрос пароля
+- `-R` — создать `postgresql.auto.conf` с настройками replication
+- `-p 5435` — порт источника (ВМ3)
+
+**Запуск кластера:**
+
+```bash
+pg_ctlcluster start 15 ex14_vm4
+```
+
+**Подтверждение режима репликации:**
 
 ```sql
-EXPLAIN SELECT * FROM bookings
-WHERE book_date > '2026-05-04';
+SELECT * FROM pg_is_in_recovery();
+-- true (t) — узел в режиме standby
 ```
 
-Результат выполнения:
-
-```text
-Seq Scan on bookings  (cost=0.00..97383.48 rows=1603336 width=21)
-  Filter: (book_date > '2026-05-04 00:00:00+03'::timestamp with time zone)
-```
-
-После секционирования:
+**Проверка данных:**
 
 ```sql
-EXPLAIN SELECT * FROM bookings_m
-WHERE book_date > '2026-05-04';
+SELECT * FROM test;   -- id: 1, 2, 3
+SELECT * FROM test2;  -- id: 4, 5, 6
 ```
 
-Результат выполнения:
 
-```text
-Seq Scan on bookings2026 bookings_m  (cost=0.00..63587.59 rows=1570289 width=21)
-  Filter: (book_date > '2026-05-04 00:00:00+03'::timestamp with time zone)
-```
+***
 
-Это показывает, что PostgreSQL использует только нужную секцию и не обращается к лишним данным.
+## Проверка работы системы
 
-Для более широкого условия:
+### Тест 1: Вставка в `test` на ВМ1
 
 ```sql
-EXPLAIN SELECT * FROM bookings_m
-WHERE book_date > '2025-05-04';
+-- ВМ1
+INSERT INTO test SELECT 1 UNION SELECT 2 UNION SELECT 3;
 ```
 
-Результат выполнения:
+**Результат:**
 
-```text
-Append  (cost=0.00..121907.22 rows=4904748 width=21)
-  ->  Seq Scan on bookings2025 bookings_m_1  (cost=0.00..33795.89 rows=1702141 width=21)
-        Filter: (book_date > '2025-05-04 00:00:00+03'::timestamp with time zone)
-  ->  Seq Scan on bookings2026 bookings_m_2  (cost=0.00..63587.59 rows=3202607 width=21)
-        Filter: (book_date > '2025-05-04 00:00:00+03'::timestamp with time zone)
-```
+- ВМ2: `SELECT * FROM test;` → 1, 2, 3 ✓
+- ВМ3: `SELECT * FROM test;` → 1, 2, 3 ✓
+- ВМ4: `SELECT * FROM test;` → 1, 2, 3 ✓
 
-В этом случае задействованы обе секции, но каждая проверяется отдельно.
 
-## Вывод по производительности
-Секционирование дало:
-- Уменьшение объема сканируемых данных.
-- Ускорение запросов с фильтрацией по дате.
-- Более эффективное использование планировщика.
+### Тест 2: Вставка в `test2` на ВМ2
 
-## Пример запросов
 ```sql
-SELECT * FROM bookings_m
-WHERE book_date >= '2026-01-01';
-
-SELECT count(*)
-FROM bookings_m
-WHERE date_part('year', book_date) = 2026;
+-- ВМ2
+INSERT INTO test2 SELECT 4 UNION SELECT 5 UNION SELECT 6;
 ```
 
-## Итог
-В ходе работы:
-- Реализовано секционирование таблицы `bookings`.
-- Выбран тип RANGE по `book_date`.
-- Выполнена миграция данных.
-- Подтверждено корректное распределение строк по секциям.
-- Проверены операции INSERT, UPDATE, DELETE.
-- Показано изменение плана выполнения запросов после секционирования.
+**Результат:**
 
-Секционирование показало себя как эффективный инструмент для работы с большими объемами данных.
+- ВМ1: `SELECT * FROM test2;` → 4, 5, 6 ✓
+- ВМ3: `SELECT * FROM test2;` → 4, 5, 6 ✓
+- ВМ4: `SELECT * FROM test2;` → 4, 5, 6 ✓
+
+***
+
+## Итоговая схема репликации
+
+```
+ВМ1 (test ⊢ публикация) ──┐
+                          ├─► ВМ3 (test подписка) ──┐
+ВМ2 (test2 ⊢ публикация) ─┤                        ├─► ВМ4 (физическая реплика)
+                          ├─► ВМ3 (test2 подписка) ─┘
+                          │
+ВМ1 (подписка test2) ◄────┘
+ВМ2 (подписка test)  ◄────┘
+```
+
+
+***
+
+## Ключевые моменты
+
+| Параметр | Значение |
+| :-- | :-- |
+| `wal_level` | `logical` (обязательно для логической репликации) |
+| Тип репликации ВМ1–ВМ3 | Логическая (logical replication через publication/subscription) |
+| Тип репликации ВМ3–ВМ4 | Физическая (streaming replication через pg_basebackup) |
+| Флаг `standby.signal` | Автоматически создан pg_basebackup для ВМ4 |
+| Слоты репликации | Автоматически создаются при `CREATE SUBSCRIPTION` |
+
+
+***
+
+## Выводы
+
+✅ Миникластер из 3 ВМ с двусторонней логической репликацией успешно настроен
+✅ ВМ3 работает как объединённая точка чтения для обеих таблиц
+✅ Физическая реплика ВМ4 корректно синхронизируется с ВМ3
+✅ Все тесты вставки подтверждают работоспособность репликации во всех узлах
+
+Репликация работает в обоих направлениях: данные из `test` на ВМ1 реплицируются на ВМ2 и ВМ3, данные из `test2` на ВМ2 реплицируются на ВМ1 и ВМ3. ВМ4 получает полные данные через физическую репликацию.
+
