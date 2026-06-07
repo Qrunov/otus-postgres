@@ -105,14 +105,6 @@ CREATE SUBSCRIPTION test_sub
 
 ✓ Слот репликации `test_sub` создан на сервере публикации.
 
-**3.2. Проверка репликации:**
-
-```sql
-SELECT * FROM test;
--- id: 1, 2, 3
-```
-
-
 ***
 
 ### Этап 4: Подписка ВМ1 на публикацию ВМ2
@@ -309,39 +301,6 @@ SELECT * FROM test2;
 ```
 
 ✓ ВМ4 успешно синхронизируется с ВМ3 через физическую репликацию.
-
-***
-
-## Финальная проверка всей системы
-
-### Тест 1: Вставка в `test` на ВМ1
-
-```sql
--- ВМ1 (порт 5433)
-INSERT INTO test SELECT 1 UNION SELECT 2 UNION SELECT 3;
-```
-
-| Узел | Проверка | Результат |
-| :-- | :-- | :-- |
-| ВМ1 | `SELECT * FROM test;` | 1, 2, 3 |
-| ВМ2 | `SELECT * FROM test;` | 1, 2, 3 ✓ |
-| ВМ3 | `SELECT * FROM test;` | 1, 2, 3 ✓ |
-| ВМ4 | `SELECT * FROM test;` | 1, 2, 3 ✓ |
-
-### Тест 2: Вставка в `test2` на ВМ2
-
-```sql
--- ВМ2 (порт 5434)
-INSERT INTO test2 SELECT 4 UNION SELECT 5 UNION SELECT 6;
-```
-
-| Узел | Проверка | Результат |
-| :-- | :-- | :-- |
-| ВМ2 | `SELECT * FROM test2;` | 4, 5, 6 |
-| ВМ1 | `SELECT * FROM test2;` | 4, 5, 6 ✓ |
-| ВМ3 | `SELECT * FROM test2;` | 4, 5, 6 ✓ |
-| ВМ4 | `SELECT * FROM test2;` | 4, 5, 6 ✓ |
-
 
 ***
 
