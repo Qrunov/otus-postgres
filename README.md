@@ -1,356 +1,245 @@
-# Отчёт: Настройка миникластера PostgreSQL с репликацией
+# Отчет по выполнению задания
 
 ## Цель работы
 
-Реализовать миникластер на трёх виртуальных машинах с логической репликацией PostgreSQL и настроить физическую репликацию на четвёртую ВМ.
+Применить логический бэкап и восстановиться из бэкапа.
 
-***
+## Выполненные действия
 
-## Хронология выполнения
+### 1. Создание базы данных и схемы
 
-### Этап 1: Настройка ВМ1 (порт 5433)
+```sql
+create database test_db;
+```
 
-**1.1. Проверка наличия кластеров:**
+**Результат:**
+```text
+CREATE DATABASE
+```
+
+```sql
+\c test_db;
+```
+
+**Результат:**
+```text
+Вы подключены к базе данных "test_db" как пользователь "postgres".
+```
+
+```sql
+create schema my_schema;
+```
+
+**Результат:**
+```text
+CREATE SCHEMA
+```
+
+```text
+SET search_path = my_schema, public;
+```
+
+### 2. Создание таблиц
+
+```sql
+create table table1(id int);
+```
+
+**Результат:**
+```text
+CREATE TABLE
+```
+
+```sql
+create table table2 (like table1);
+```
+
+**Результат:**
+```text
+CREATE TABLE
+```
+
+### 3. Заполнение таблицы данными
+
+```sql
+insert into table1 select generate_series(1, 100);
+```
+
+**Результат:**
+```text
+INSERT 0 100
+```
+
+### 4. Бэкап через COPY
+
+Создание каталога для бэкапов под пользователем `postgres`:
 
 ```bash
-pg_lsclusters
+mkdir -p /var/lib/postgresql/backups/
 ```
 
-Подтверждено: кластер `ex14_vm1` работает на порту 5433.
-
-**1.2. Создание таблиц:**
+Выгрузка данных из `table1` в файл:
 
 ```sql
-psql -U postgres -p 5433
-CREATE TABLE test(id int);      -- для записи
-CREATE TABLE test2(id int);     -- для чтения
+\copy table1 to /var/lib/postgresql/backups/table1
 ```
 
-**1.3. Создание публикации:**
+**Результат:**
+```text
+COPY 100
+```
+
+### 5. Восстановление из COPY
+
+Загрузка данных из файла в `table2`:
 
 ```sql
-CREATE PUBLICATION pub_test FOR TABLE test;
+\copy table2 from /var/lib/postgresql/backups/table1
 ```
 
-**1.4. Настройка wal_level:**
+**Результат:**
+```text
+COPY 100
+```
+
+Проверка содержимого `table1`:
 
 ```sql
-ALTER SYSTEM SET wal_level = 'logical';
+select * from table1 order by id limit 10;
 ```
 
-**1.5. Перезапуск кластера:**
+**Результат:**
+```text
+ id
+----
+  1
+  2
+  3
+  4
+  5
+  6
+  7
+  8
+  9
+ 10
+(10 строк)
+```
+
+Проверка содержимого `table2`:
+
+```sql
+select * from table2 order by id limit 10;
+```
+
+**Результат:**
+```text
+ id
+----
+  1
+  2
+  3
+  4
+  5
+  6
+  7
+  8
+  9
+ 10
+(10 строк)
+```
+
+### 6. Создание дампа через pg_dump
+
+Создание дампа схемы `my_schema` в формате `-Fc`:
 
 ```bash
-pg_ctlcluster restart 15 ex14_vm1
+pg_dump -U postgres -p 5433 -Fc --schema my_schema test_db > /var/lib/postgresql/backups/test_db
 ```
 
-**1.6. Проверка публикации:**
+**Результат:**
+```text
+Команда выполнена успешно.
+```
+
+### 7. Создание базы для восстановления
 
 ```sql
-SELECT * FROM pg_publication_tables;
--- pub_test | public | test
+create database restored_db;
 ```
 
+**Результат:**
+```text
+CREATE DATABASE
+```
 
-***
+```sql
+\c restored_db;
+```
 
-### Этап 2: Настройка ВМ2 (порт 5434)
+**Результат:**
+```text
+Вы подключены к базе данных "restored_db" как пользователь "postgres".
+```
 
-**2.1. Проверка кластеров:**
+### 8. Подготовка схемы для восстановления
+
+```sql
+create schema my_schema;
+```
+
+**Результат:**
+```text
+CREATE SCHEMA
+```
+
+### 9. Восстановление через pg_restore
+
+Восстановление только `table2` из дампа:
 
 ```bash
-pg_lsclusters
+pg_restore -U postgres -p 5433 -d restored_db -t table2 /var/lib/postgresql/backups/test_db
 ```
 
-Подтверждено: кластер `ex14_vm2` работает на порту 5434.
+**Результат:**
+```text
+Команда выполнена успешно.
+```
 
-**2.2. Настройка wal_level:**
+### 10. Проверка восстановленных данных
 
 ```sql
-psql -U postgres -p 5434
-ALTER SYSTEM SET wal_level = 'logical';
+select * from my_schema.table2 order by id limit 20;
 ```
 
-**2.3. Перезапуск кластера:**
-
-```bash
-pg_ctlcluster restart 15 ex14_vm2
+**Результат:**
+```text
+ id
+----
+  1
+  2
+  3
+  4
+  5
+  6
+  7
+  8
+  9
+ 10
+ 11
+ 12
+ 13
+ 14
+ 15
+ 16
+ 17
+ 18
+ 19
+ 20
+(20 строк)
 ```
 
-**2.4. Создание таблиц:**
+## Итог
 
-```sql
-CREATE TABLE test2(id int);     -- для записи
-CREATE TABLE test(id int);      -- для чтения
-```
+Выполнены логический бэкап через `\copy`, создание дампа схемы через `pg_dump -Fc`, а также восстановление данных в новую базу через `pg_restore`.
 
-**2.5. Создание публикации:**
-
-```sql
-CREATE PUBLICATION test2_pub FOR TABLE test2;
-```
-
-
-***
-
-### Этап 3: Подписка ВМ2 на публикацию ВМ1
-
-**3.1. Создание подписки:**
-
-```sql
-CREATE SUBSCRIPTION test_sub 
-  CONNECTION 'port=5433' 
-  PUBLICATION pub_test;
-```
-
-✓ Слот репликации `test_sub` создан на сервере публикации.
-
-***
-
-### Этап 4: Подписка ВМ1 на публикацию ВМ2
-
-**4.1. Создание подписки на ВМ1:**
-
-```sql
-psql -U postgres -p 5433
-CREATE SUBSCRIPTION test2_sub 
-  CONNECTION 'port=5434' 
-  PUBLICATION test2_pub;
-```
-
-✓ Слот репликации `test2_sub` создан на сервере публикации.
-
-***
-
-### Этап 5: Проверка логической репликации (ВМ1 ↔ ВМ2)
-
-**5.1. Вставка в `test` на ВМ1:**
-
-```sql
-INSERT INTO test SELECT 1 UNION SELECT 2 UNION SELECT 3;
--- INSERT 0 3
-```
-
-**5.2. Проверка на ВМ2:**
-
-```sql
-psql -U postgres -p 5434
-SELECT * FROM test;
--- id: 1, 2, 3 ✓
-```
-
-**5.3. Вставка в `test2` на ВМ2:**
-
-```sql
-INSERT INTO test2 SELECT 4 UNION SELECT 5 UNION SELECT 6;
--- INSERT 0 3
-```
-
-**5.4. Проверка на ВМ1:**
-
-```sql
-psql -U postgres -p 5433
-SELECT * FROM test2;
--- id: 4, 5, 6 ✓
-```
-
-
-***
-
-### Этап 6: Настройка ВМ3 (порт 5435)
-
-**6.1. Проверка кластеров:**
-
-```bash
-pg_lsclusters
-```
-
-Подтверждено: кластер `ex14_vm3` работает на порту 5435.
-
-**6.2. Настройка wal_level:**
-
-```sql
-psql -U postgres -p 5435
-ALTER SYSTEM SET wal_level = 'logical';
-```
-
-**6.3. Перезапуск кластера:**
-
-```bash
-pg_ctlcluster restart 15 ex14_vm3
-```
-
-**6.4. Создание таблиц:**
-
-```sql
-CREATE TABLE test2(id int);
-CREATE TABLE test(id int);
-```
-
-**6.5. Создание подписки на ВМ1 (test):**
-
-```sql
-CREATE SUBSCRIPTION test_vm3_sub 
-  CONNECTION 'port=5433' 
-  PUBLICATION pub_test;
-```
-
-✓ Слот репликации `test_vm3_sub` создан.
-
-**6.6. Создание подписки на ВМ2 (test2):**
-
-```sql
-CREATE SUBSCRIPTION test2_vm3_sub 
-  CONNECTION 'port=5434' 
-  PUBLICATION test2_pub;
-```
-
-✓ Слот репликации `test2_vm3_sub` создан.
-
-***
-
-### Этап 7: Проверка репликации на ВМ3
-
-**7.1. Проверка `test`:**
-
-```sql
-SELECT * FROM test;
--- id: 1, 2, 3 ✓
-```
-
-**7.2. Проверка `test2`:**
-
-```sql
-SELECT * FROM test2;
--- id: 4, 5, 6 ✓
-```
-
-✓ ВМ3 успешно получает данные из обоих источников.
-
-***
-
-### Этап 8: Настройка физической репликации ВМ4 (порт 5436)
-
-**8.1. Проверка входа:**
-
-```bash
-sudo su
-```
-
-**8.2. Проверка кластеров:**
-
-```bash
-pg_lsclusters
-```
-
-Подтверждено: кластер `ex14_vm4` на порту 5436.
-
-**8.3. Остановка кластера:**
-
-```bash
-pg_ctlcluster stop 15 ex14_vm4
-```
-
-**8.4. Удаление старых данных:**
-
-```bash
-rm -fr /var/lib/postgresql/15/ex14_vm4/
-```
-
-**8.5. Создание физического репликата:**
-
-```bash
-sudo -u postgres pg_basebackup \
-  -D /var/lib/postgresql/15/ex14_vm4 \
-  -W -R -p 5435 -U postgres
-```
-
-✓ Backup выполнен успешно, слот репликации создан, `standby.signal` создан автоматически.
-
-**8.6. Запуск кластера:**
-
-```bash
-pg_ctlcluster start 15 ex14_vm4
-```
-
-
-***
-
-### Этап 9: Проверка физической репликации ВМ4
-
-**9.1. Проверка режима репликации:**
-
-```sql
-psql -U postgres -p 5436
-SELECT * FROM pg_is_in_recovery();
--- true (t) ✓
-```
-
-**9.2. Проверка `test`:**
-
-```sql
-SELECT * FROM test;
--- id: 1, 2, 3 ✓
-```
-
-**9.3. Проверка `test2`:**
-
-```sql
-SELECT * FROM test2;
--- id: 4, 5, 6 ✓
-```
-
-✓ ВМ4 успешно синхронизируется с ВМ3 через физическую репликацию.
-
-***
-
-## Архитектура кластера
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    МИККЛАСТЕР PostgreSQL                     │
-├──────────────┬──────────────┬──────────────┬───────────────┤
-│   ВМ1        │   ВМ2        │   ВМ3        │   ВМ4         │
-│  порт 5433   │  порт 5434   │  порт 5435   │  порт 5436    │
-├──────────────┼──────────────┼──────────────┼───────────────┤
-│ pub: test    │ pub: test2   │ sub: test    │ физ. реплика  │
-│ sub: test2   │ sub: test    │ sub: test2   │ от ВМ3        │
-│ ЗАПИСЬ: test │ ЗАПИСЬ: test2│ ЧТЕНИЕ: оба  │ ЧТЕНИЕ: оба   │
-└──────────────┴──────────────┴──────────────┴───────────────┘
-
-Логическая репликация (publication/subscription):
-  ВМ1.test ──► ВМ2.test, ВМ3.test
-  ВМ2.test2 ─► ВМ1.test2, ВМ3.test2
-
-Физическая репликация (streaming replication):
-  ВМ3 ──► ВМ4
-```
-
-
-***
-
-## Использованные ключевые команды
-
-| Задача | Команда |
-| :-- | :-- |
-| Проверка кластеров | `pg_lsclusters` |
-| Создание таблицы | `CREATE TABLE name(id int);` |
-| Создание публикации | `CREATE PUBLICATION pub_name FOR TABLE table_name;` |
-| Настройка wal_level | `ALTER SYSTEM SET wal_level = 'logical';` |
-| Перезапуск кластера | `pg_ctlcluster restart 15 ex14_vmX` |
-| Создание подписки | `CREATE SUBSCRIPTION sub_name CONNECTION 'port=XXX' PUBLICATION pub_name;` |
-| Физическая реплика | `pg_basebackup -D /path -W -R -p PORT -U postgres` |
-| Проверка репликации | `SELECT * FROM pg_is_in_recovery();` |
-
-
-***
-
-## Выводы
-
-✅ Настроен миникластер из 3 ВМ с двусторонней логической репликацией
-✅ ВМ3 работает как объединённая точка чтения для таблиц `test` и `test2`
-✅ ВМ4 успешно настроена как физическая реплика от ВМ3
-✅ Все тесты вставки подтверждают работоспособность репликации на всех узлах
-✅ Логическая репликация работает в обоих направлениях (ВМ1↔ВМ2)
-✅ Физическая репликация ВМ3→ВМ4 синхронизирует все данные корректно
-
+Проверка показала, что данные успешно восстановлены.
