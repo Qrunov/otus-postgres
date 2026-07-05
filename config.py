@@ -25,16 +25,13 @@ RUN_DESCRIPTION = os.getenv('RUN_DESCRIPTION', 'Wikifacts-window_5 gold standard
 # Настройки очистки данных
 CLEAR_TABLES_BEFORE_LOAD = os.getenv('CLEAR_TABLES_BEFORE_LOAD', 'true').lower() == 'true'
 
-# Настройки индексов
-CREATE_ADDITIONAL_INDEXES = os.getenv('CREATE_ADDITIONAL_INDEXES', 'true').lower() == 'true'
-
 # Путь для сохранения примеров
 EXAMPLES_OUTPUT_FILE = os.getenv('EXAMPLES_OUTPUT_FILE', 'wikifacts_examples.txt')
 
 # Логирование
 VERBOSE = os.getenv('VERBOSE', 'true').lower() == 'true'
 
-# config.py (добавить строки)
+# config.py
 CORPUS_SPLIT = os.getenv('CORPUS_SPLIT', 'train')
 QUERIES_SPLIT = os.getenv('QUERIES_SPLIT', 'train')
-QRELS_SPLIT = os.getenv('QRELS_SPLIT', 'dev')   # уже было, но убедитесь, что есть
+QRELS_SPLIT = os.getenv('QRELS_SPLIT', 'dev')

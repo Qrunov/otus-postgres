@@ -47,35 +47,6 @@ def load_queries(cur, dataset):
         print(f"✅ Загружено {len(mapping)} запросов")
     return mapping
 
-def insert_results_from_mapping(cur, run_id, qrels_dataset, news_mapping, query_mapping):
-    """Вставка результатов. qrels: поля query-id, corpus-id, score."""
-    if VERBOSE:
-        print("Вставка результатов (result)...")
-    count = 0
-    for item in qrels_dataset:
-        qid = str(item['query-id'])
-        did = str(item['corpus-id'])
-        score = item['score']
-
-        pg_query_id = query_mapping.get(qid)
-        pg_news_id = news_mapping.get(did)
-
-        if pg_query_id is None or pg_news_id is None:
-            if VERBOSE:
-                print(f"⚠️ Пропущена запись: query={qid}, doc={did}")
-            continue
-
-        cur.execute("""
-            INSERT INTO result (query_id, news_id, run_id, rank)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (query_id, news_id, run_id) 
-            DO UPDATE SET rank = EXCLUDED.rank
-        """, (pg_query_id, pg_news_id, run_id, score))
-        count += 1
-
-    if VERBOSE:
-        print(f"✅ Вставлено/обновлено {count} записей в result")
-
 def load_dataset_to_db():
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
@@ -90,13 +61,9 @@ def load_dataset_to_db():
 
         if VERBOSE:
             print(f"\nЗагрузка датасета {DATASET_NAME} (corpus, queries)...")
-        # Загружаем без split -> получаем DatasetDict, затем берём нужный сплит
+
         corpus_dataset = load_dataset(DATASET_NAME, "corpus", cache_dir=CACHE_DIR)[CORPUS_SPLIT]
         queries_dataset = load_dataset(DATASET_NAME, "queries", cache_dir=CACHE_DIR)[QUERIES_SPLIT]
-
-        if VERBOSE:
-            print(f"Загрузка датасета qrels: {DATASET_QRELS_NAME} (split={QRELS_SPLIT})...")
-        qrels_dataset = load_dataset(DATASET_QRELS_NAME, cache_dir=CACHE_DIR)[QRELS_SPLIT]
 
         if VERBOSE:
             print("✅ Датасеты загружены")
