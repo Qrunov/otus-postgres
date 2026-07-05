@@ -41,3 +41,6 @@ BEGIN
     RETURN v_run_id;
 END;
 $$;
+
+
+--select * from compute_vector_results_('vv 3 1000', 3, 1000);
